@@ -35,26 +35,6 @@ async function getIncremental(nextPageUrl) {
     }
 }
 
-async function getAllPages(initUrl) {
-    try {
-        let nextPage = initUrl;
-
-        while (nextPage) {
-            const currPageData = await getIncremental(nextPage);
-            sortResult(currPageData);
-            nextPage = currPageData.next_page;
-
-            if (currPageData.count < 1000) break;
-        }
-
-        insertDatabase(data);
-    } catch (error) {
-        console.log(error);
-    }
-}
-
-getAllPages(url);
-
 async function sortResult(res) {
     try {
         let sortedRes = res.ticket_events.sort(
@@ -140,3 +120,23 @@ function insertDatabase(res) {
         }
     }
 }
+
+async function getAllPages(initUrl) {
+    try {
+        let nextPage = initUrl;
+
+        while (nextPage) {
+            const currPageData = await getIncremental(nextPage);
+            sortResult(currPageData);
+            nextPage = currPageData.next_page;
+
+            if (currPageData.count < 1000) break;
+        }
+
+        insertDatabase(data);
+    } catch (error) {
+        console.log(error);
+    }
+}
+
+getAllPages(url);
