@@ -20,19 +20,24 @@ const client = new Client({
 client.connect();
 
 async function getIncremental(nextPageUrl) {
-    try {
-        const response = await fetch(nextPageUrl, {
-            method: "GET",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Basic ${token}`,
-            },
-        });
+    const response = await fetch(nextPageUrl, {
+        method: "GET",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Basic ${token}`,
+        },
+    });
 
-        return response.json();
-    } catch (error) {
-        console.log(error);
+    if (response.status === 429) {
+        const secondsToWait = Number(response.headers.get("retry-after"));
+        await new Promise((resolve) =>
+            setTimeout(resolve, secondsToWait * 1000)
+        );
+
+        return getIncremental(nextPageUrl);
     }
+
+    return response.json();
 }
 
 async function sortResult(res) {
@@ -61,8 +66,6 @@ function insertDatabase(res) {
             console.log(err);
             return;
         }
-
-        client.end;
     });
 
     res = res.filter((obj) =>
@@ -79,6 +82,7 @@ function insertDatabase(res) {
 
     for (let i = 0; i < resultArray.length; i++) {
         let isUpdated = false;
+
         for (let j = resultArray[i].child_events.length - 1; j >= 0; j--) {
             if (
                 resultArray[i].child_events[j].status &&
@@ -98,7 +102,6 @@ function insertDatabase(res) {
                         } else {
                             console.log(err.message);
                         }
-                        client.end;
                     }
                 );
             }
@@ -113,7 +116,6 @@ function insertDatabase(res) {
                         } else {
                             console.log(err.message);
                         }
-                        client.end;
                     }
                 );
             }
@@ -129,9 +131,12 @@ async function getAllPages(initUrl) {
             const currPageData = await getIncremental(nextPage);
             sortResult(currPageData);
             nextPage = currPageData.next_page;
+            console.log(nextPage);
 
             if (currPageData.count < 1000) break;
         }
+
+        data = data.sort((a, b) => a.ticket_id - b.ticket_id);
 
         insertDatabase(data);
     } catch (error) {
