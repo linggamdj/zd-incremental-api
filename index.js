@@ -134,11 +134,9 @@ function insertDatabase(res) {
                 resultArray[i].child_events[j].previous_value
             ) {
                 isCustomStatusId = true;
-                // storeChild.custom_status_id = ticketStatusMap(
-                //     resultArray[i].child_events[j].custom_status_id
-                // );
-                storeChild.custom_status_id =
-                    resultArray[i].child_events[j].custom_status_id;
+                storeChild.custom_status_id = ticketStatusMap(
+                    resultArray[i].child_events[j].custom_status_id
+                );
             }
 
             if (
