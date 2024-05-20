@@ -1,5 +1,8 @@
-require("dotenv").config();
 const { Client } = require("pg");
+require("dotenv").config();
+
+// Local JSON
+const statuses = require("./data/ticket_custom_status.json");
 
 // API
 const url = `${process.env.ALFA_DOMAIN}${process.env.ALFA_ENDPOINT}`;
@@ -19,7 +22,7 @@ const client = new Client({
 
 client.connect();
 
-async function getIncremental(nextPageUrl) {
+async function getTickets(nextPageUrl) {
     const response = await fetch(nextPageUrl, {
         method: "GET",
         headers: {
@@ -34,32 +37,42 @@ async function getIncremental(nextPageUrl) {
             setTimeout(resolve, secondsToWait * 1000)
         );
 
-        return getIncremental(nextPageUrl);
+        return getTickets(nextPageUrl);
     }
 
     return response.json();
 }
 
-async function sortResult(res) {
-    try {
-        let sortedRes = res.ticket_events.sort(
-            (a, b) => a.ticket_id - b.ticket_id
-        );
+function ticketStatusMap(status_id) {
+    let filteredStatus = statuses.find(
+        (status) => status.id === Number(status_id)
+    );
 
-        sortedRes.push({
-            child_events: [],
-            next_page: res.next_page,
-            count: res.count,
-        });
-
-        data = data.concat(sortedRes);
-    } catch (error) {
-        console.log(error);
-    }
+    return filteredStatus.agent_label;
 }
 
-function insertDatabase(res) {
-    client.query(`TRUNCATE TABLE tickets`, (err, res) => {
+function customFieldMap(fields, field_id) {
+    res = "-";
+
+    let filteredStatus = fields.find((field) => field.id === field_id);
+
+    if (filteredStatus.value) {
+        let field_value = filteredStatus.value
+            .replace(/___/g, "_&_")
+            .split("__");
+
+        if (field_id === 20013659669401) {
+            res = field_value[field_value.length - 1];
+        } else {
+            res = filteredStatus.value;
+        }
+    }
+
+    return res;
+}
+
+function insertDatabase(data) {
+    client.query(`TRUNCATE TABLE tickets_search`, (err, res) => {
         if (res) {
             console.log("TRUNCATE SUCCESS!");
         } else {
@@ -68,58 +81,26 @@ function insertDatabase(res) {
         }
     });
 
-    res = res.filter((obj) =>
-        obj.child_events.some((event) => event.hasOwnProperty("status"))
-    );
-
-    let latestObjects = {};
-
-    res.forEach((obj) => {
-        latestObjects[obj.ticket_id] = obj;
-    });
-
-    let resultArray = Object.values(latestObjects);
-
-    for (let i = 0; i < resultArray.length; i++) {
-        let isUpdated = false;
-
-        for (let j = resultArray[i].child_events.length - 1; j >= 0; j--) {
-            if (
-                resultArray[i].child_events[j].status &&
-                resultArray[i].child_events[j].previous_value
-            ) {
-                isUpdated = true;
-
-                client.query(
-                    `INSERT INTO tickets(ticket_id, status) VALUES($1, $2) RETURNING *`,
-                    [
-                        resultArray[i].ticket_id,
-                        resultArray[i].child_events[j].status,
-                    ],
-                    (err, res) => {
-                        if (res) {
-                            console.log(res.rows);
-                        } else {
-                            console.log(err.message);
-                        }
-                    }
-                );
+    for (let i = 0; i < data.length; i++) {
+        client.query(
+            `INSERT INTO tickets_search(ticket_id, status, created_date, category_detail, cabang) VALUES($1, $2, $3, $4, $5) RETURNING *`,
+            [
+                data[i].id,
+                data[i].status === "hold"
+                    ? ticketStatusMap(data[i].custom_status_id)
+                    : data[i].status,
+                data[i].created_at,
+                customFieldMap(data[i].custom_fields, 20013659669401),
+                customFieldMap(data[i].custom_fields, 20001665446041),
+            ],
+            (err, res) => {
+                if (res) {
+                    console.log(res.rows);
+                } else {
+                    console.log(err.message);
+                }
             }
-
-            if (j === 0 && !isUpdated) {
-                client.query(
-                    `INSERT INTO tickets(ticket_id, status) VALUES($1, $2) RETURNING *`,
-                    [resultArray[i].ticket_id, "new"],
-                    (err, res) => {
-                        if (res) {
-                            console.log(res.rows);
-                        } else {
-                            console.log(err.message);
-                        }
-                    }
-                );
-            }
-        }
+        );
     }
 }
 
@@ -128,15 +109,13 @@ async function getAllPages(initUrl) {
         let nextPage = initUrl;
 
         while (nextPage) {
-            const currPageData = await getIncremental(nextPage);
-            sortResult(currPageData);
-            nextPage = currPageData.next_page;
             console.log(nextPage);
+            const currPageData = await getTickets(nextPage);
+            nextPage = currPageData.next_page;
+            data = data.concat(currPageData.results);
 
-            if (currPageData.count < 1000) break;
+            if (!nextPage) break;
         }
-
-        data = data.sort((a, b) => a.ticket_id - b.ticket_id);
 
         insertDatabase(data);
     } catch (error) {
