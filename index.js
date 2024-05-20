@@ -1,5 +1,8 @@
-require("dotenv").config();
 const { Client } = require("pg");
+require("dotenv").config();
+
+// Local JSON
+const statuses = require("./data/ticket_custom_status.json");
 
 // API
 const url = `${process.env.ALFA_DOMAIN}${process.env.ALFA_ENDPOINT}`;
@@ -58,8 +61,38 @@ async function sortResult(res) {
     }
 }
 
+function concatChildEvents(res) {
+    const eventsMap = new Map();
+
+    res.forEach((item) => {
+        const { ticket_id, created_at, child_events } = item;
+
+        if (eventsMap.has(ticket_id)) {
+            eventsMap.get(ticket_id).child_events.push(...child_events);
+        } else {
+            eventsMap.set(ticket_id, {
+                ticket_id,
+                created_at,
+                child_events: [...child_events],
+            });
+        }
+    });
+
+    const result = Array.from(eventsMap.values());
+
+    return result;
+}
+
+function ticketStatusMap(ticketId) {
+    let filteredStatus = statuses.find(
+        (status) => status.id === Number(ticketId)
+    );
+
+    return filteredStatus.status_category;
+}
+
 function insertDatabase(res) {
-    client.query(`TRUNCATE TABLE tickets`, (err, res) => {
+    client.query(`TRUNCATE TABLE tickets_example`, (err, res) => {
         if (res) {
             console.log("TRUNCATE SUCCESS!");
         } else {
@@ -69,32 +102,91 @@ function insertDatabase(res) {
     });
 
     res = res.filter((obj) =>
-        obj.child_events.some((event) => event.hasOwnProperty("status"))
+        obj.child_events.some(
+            (event) =>
+                event.hasOwnProperty("status") ||
+                event.hasOwnProperty("custom_status_id") ||
+                event.hasOwnProperty("custom_ticket_fields")
+        )
     );
 
-    let latestObjects = {};
-
-    res.forEach((obj) => {
-        latestObjects[obj.ticket_id] = obj;
-    });
-
-    let resultArray = Object.values(latestObjects);
+    let resultArray = concatChildEvents(res);
 
     for (let i = 0; i < resultArray.length; i++) {
-        let isUpdated = false;
+        let isStatus = false;
+        let isCustomStatusId = false;
+        let isCategoryDetail = false;
+        let isCabang = false;
+
+        let storeChild = {
+            ticket_id: resultArray[i].ticket_id,
+            status: "",
+            custom_status_id: "",
+            created_at: resultArray[i].created_at,
+            category_detail: null,
+            cabang: null,
+        };
 
         for (let j = resultArray[i].child_events.length - 1; j >= 0; j--) {
             if (
+                !isCustomStatusId &&
+                resultArray[i].child_events[j].custom_status_id &&
+                resultArray[i].child_events[j].previous_value
+            ) {
+                isCustomStatusId = true;
+                // storeChild.custom_status_id = ticketStatusMap(
+                //     resultArray[i].child_events[j].custom_status_id
+                // );
+                storeChild.custom_status_id =
+                    resultArray[i].child_events[j].custom_status_id;
+            }
+
+            if (
+                !isStatus &&
                 resultArray[i].child_events[j].status &&
                 resultArray[i].child_events[j].previous_value
             ) {
-                isUpdated = true;
+                isStatus = true;
+                storeChild.status = resultArray[i].child_events[j].status;
+            }
 
+            if (
+                !isCategoryDetail &&
+                resultArray[i].child_events[j].custom_ticket_fields &&
+                resultArray[i].child_events[j].custom_ticket_fields[
+                    "20013659669401"
+                ]
+            ) {
+                isCategoryDetail = true;
+                storeChild.category_detail =
+                    resultArray[i].child_events[j].custom_ticket_fields[
+                        "20013659669401"
+                    ].split("__")[6];
+            }
+
+            if (
+                !isCabang &&
+                resultArray[i].child_events[j].custom_ticket_fields &&
+                resultArray[i].child_events[j].custom_ticket_fields[
+                    "20001665446041"
+                ]
+            ) {
+                isCabang = true;
+                storeChild.cabang =
+                    resultArray[i].child_events[j].custom_ticket_fields[
+                        "20001665446041"
+                    ];
+            }
+
+            if (j === 0 && (isStatus || isCustomStatusId)) {
                 client.query(
-                    `INSERT INTO tickets(ticket_id, status) VALUES($1, $2) RETURNING *`,
+                    `INSERT INTO tickets_example(ticket_id, status, created_date, category_detail, cabang) VALUES($1, $2, $3, $4, $5) RETURNING *`,
                     [
-                        resultArray[i].ticket_id,
-                        resultArray[i].child_events[j].status,
+                        storeChild.ticket_id,
+                        storeChild.custom_status_id || storeChild.status,
+                        storeChild.created_at,
+                        storeChild.category_detail,
+                        storeChild.cabang,
                     ],
                     (err, res) => {
                         if (res) {
@@ -106,10 +198,17 @@ function insertDatabase(res) {
                 );
             }
 
-            if (j === 0 && !isUpdated) {
+            if (j === 0 && !isCustomStatusId && !isStatus) {
+                console.log(storeChild);
                 client.query(
-                    `INSERT INTO tickets(ticket_id, status) VALUES($1, $2) RETURNING *`,
-                    [resultArray[i].ticket_id, "new"],
+                    `INSERT INTO tickets_example(ticket_id, status, created_date, category_detail, cabang) VALUES($1, $2, $3, $4, $5) RETURNING *`,
+                    [
+                        storeChild.ticket_id,
+                        "new",
+                        storeChild.created_at,
+                        storeChild.category_detail,
+                        storeChild.cabang,
+                    ],
                     (err, res) => {
                         if (res) {
                             console.log(res.rows);
